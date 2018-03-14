@@ -1563,6 +1563,7 @@ class TaskInstance(Base, LoggingMixin):
         self.end_date = timezone.utcnow()
         self.set_duration()
         if not test_mode:
+            self.log.error("State : %s, end_date = %s, execution : %s",self.state,self.end_date, self.execution_date)
             session.add(Log(self.state, self))
             session.merge(self)
         session.commit()
