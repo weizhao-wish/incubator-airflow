@@ -1459,7 +1459,6 @@ class TaskInstance(Base, LoggingMixin):
 
         context = {}
         try:
-            import pdb;pdb.set_trace()
             if not mark_success:
                 context = self.get_template_context()
 
