@@ -347,6 +347,7 @@ def set_is_paused(is_paused, args, dag=None):
 
 def _run(args, dag, ti):
     if args.local:
+        log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
         run_job = jobs.LocalTaskJob(
             task_instance=ti,
             mark_success=args.mark_success,
@@ -358,12 +359,14 @@ def _run(args, dag, ti):
             pool=args.pool)
         run_job.run()
     elif args.raw:
+        log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
         ti._run_raw_task(
             mark_success=args.mark_success,
             job_id=args.job_id,
             pool=args.pool,
         )
     else:
+        log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
         pickle_id = None
         if args.ship_dag:
             try:
@@ -440,10 +443,13 @@ def run(args, dag=None):
 
     hostname = get_hostname()
     log.info("Running %s on host %s", ti, hostname)
+    log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
 
     if args.interactive:
+        log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
         _run(args, dag, ti)
     else:
+        log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
         with redirect_stdout(ti.log, logging.INFO),\
                 redirect_stderr(ti.log, logging.WARN):
             _run(args, dag, ti)
