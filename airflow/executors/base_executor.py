@@ -62,8 +62,6 @@ class BaseExecutor(LoggingMixin):
             cfg_path=None):
         pool = pool or task_instance.pool
 
-        self.log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", task_instance,task_instance.start_date,task_instance.execution_date)#vinay
-
         # TODO (edgarRd): AIRFLOW-1985:
         # cfg_path is needed to propagate the config values if using impersonation
         # (run_as_user), given that there are different code paths running tasks.

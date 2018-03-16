@@ -94,11 +94,8 @@ class S3TaskHandler(FileTaskHandler, LoggingMixin):
         # Explicitly getting log relative path is necessary as the given
         # task instance might be different than task instance passed in
         # in set_context method.
-        self.log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
-
         log_relative_path = self._render_filename(ti, try_number)
         remote_loc = os.path.join(self.remote_base, log_relative_path)
-        self.log.info("log_relative_path : %s, remote_path : %s",log_relative_path,remote_loc) #vinay
 
         if self.s3_log_exists(remote_loc):
             # If S3 remote file exists, we do not fetch logs from task instance

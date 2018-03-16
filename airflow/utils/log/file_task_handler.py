@@ -72,7 +72,6 @@ class FileTaskHandler(logging.Handler):
             jinja_context = ti.get_template_context()
             jinja_context['try_number'] = try_number
             return self.filename_jinja_template.render(**jinja_context)
-        self.log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
 
         return self.filename_template.format(dag_id=ti.dag_id,
                                              task_id=ti.task_id,
@@ -80,7 +79,6 @@ class FileTaskHandler(logging.Handler):
                                              try_number=try_number)
 
     def _read(self, ti, try_number):
-        self.log.info("Task Instance : %s , start_ts : %s ,execution_ts : %s ", ti,ti.start_date,ti.execution_date)#vinay
         """
         Template method that contains custom logic of reading
         logs given the try_number.
