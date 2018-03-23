@@ -17,6 +17,20 @@ from airflow import configuration
 from airflow.bin.cli import CLIFactory
 
 if __name__ == '__main__':
+    import sys
+    sys.path.insert(0,'/production/data_platform/current')
+    sys.dont_write_bytecode = True
+
+    from tornado.options import options
+    from data_platform.server import DataPlatform
+    from data_platform.server import configure
+    from data_platform.core.options import define_for_server
+
+    define_for_server()
+    options.env = 'be_prod'
+    configure()
+    application = DataPlatform(options, None)
+    application.connect()
 
     if configuration.get("core", "security") == 'kerberos':
         os.environ['KRB5CCNAME'] = configuration.get('kerberos', 'ccache')
