@@ -26,7 +26,7 @@ from datetime import timedelta
 import copy
 import math
 import json
-import bleach
+#import bleach
 import pendulum
 import codecs
 from collections import defaultdict
@@ -112,7 +112,8 @@ def dag_link(v, c, m, p):
     if m.dag_id is None:
         return Markup()
 
-    dag_id = bleach.clean(m.dag_id)
+    #dag_id = bleach.clean(m.dag_id)
+    dag_id = m.dag_id
     url = url_for(
         'airflow.graph',
         dag_id=dag_id,
@@ -129,7 +130,8 @@ def log_url_formatter(v, c, m, p):
 
 
 def dag_run_link(v, c, m, p):
-    dag_id = bleach.clean(m.dag_id)
+    #dag_id = bleach.clean(m.dag_id)
+    dag_id = m.dag_id
     url = url_for(
         'airflow.graph',
         dag_id=m.dag_id,
@@ -139,8 +141,10 @@ def dag_run_link(v, c, m, p):
 
 
 def task_instance_link(v, c, m, p):
-    dag_id = bleach.clean(m.dag_id)
-    task_id = bleach.clean(m.task_id)
+    #dag_id = bleach.clean(m.dag_id)
+    dag_id = m.dag_id
+    #task_id = bleach.clean(m.task_id)
+    task_id = m.task_id
     url = url_for(
         'airflow.task',
         dag_id=dag_id,
