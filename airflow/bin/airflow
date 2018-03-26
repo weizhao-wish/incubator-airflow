@@ -12,25 +12,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Allow airflow to access Data Platform code
+import sys
+sys.path.insert(0,'/production/data_platform/current')
+sys.dont_write_bytecode = True
+
 import os
 from airflow import configuration
 from airflow.bin.cli import CLIFactory
 
+# Import required to run Data Platform
+from tornado.options import options
+from data_platform.server import DataPlatform
+from data_platform.server import configure
+from data_platform.core.options import define_for_server
+
 if __name__ == '__main__':
-    import sys
-    sys.path.insert(0,'/production/data_platform/current')
-    sys.dont_write_bytecode = True
-
-    from tornado.options import options
-    from data_platform.server import DataPlatform
-    from data_platform.server import configure
-    from data_platform.core.options import define_for_server
-
-    define_for_server()
-    options.env = 'be_prod'
-    configure()
-    application = DataPlatform(options, None)
-    application.connect()
 
     if configuration.get("core", "security") == 'kerberos':
         os.environ['KRB5CCNAME'] = configuration.get('kerberos', 'ccache')
@@ -38,4 +36,13 @@ if __name__ == '__main__':
 
     parser = CLIFactory.get_parser()
     args = parser.parse_args()
+
+    # Start data platform application
+    define_for_server()
+    configure()
+    options.env = args.env # Data Platform env passed via airflow CLI
+    application = DataPlatform(options, None)
+    application.connect()
+
+    # Proceed to handle airflow command
     args.func(args)
