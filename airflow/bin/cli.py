@@ -1653,6 +1653,10 @@ class CLIFactory(object):
         # .. default to stage
         parser.add_argument(
             '--env',
+<<<<<<< HEAD
+=======
+            default='stage',
+>>>>>>> 96dcfdadc2622d8d2b96f9b9419f3de3a3c3f06b
             help='Set the environment for Data Platform'
         )
         subparsers = parser.add_subparsers(
