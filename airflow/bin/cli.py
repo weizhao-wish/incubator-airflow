@@ -1648,6 +1648,14 @@ class CLIFactory(object):
     @classmethod
     def get_parser(cls, dag_parser=False):
         parser = argparse.ArgumentParser()
+
+        # Allow users to set the Data Platform environment
+        # .. default to stage
+        parser.add_argument(
+            '--env',
+            default='stage',
+            help='Set the environment for Data Platform'
+        )
         subparsers = parser.add_subparsers(
             help='sub-command help', dest='subcommand')
         subparsers.required = True
