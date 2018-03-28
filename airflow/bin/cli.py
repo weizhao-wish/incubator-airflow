@@ -1432,6 +1432,11 @@ class CLIFactory(object):
             ("-cn", "--celery_hostname"),
             help=("Set the hostname of celery worker "
                   "if you have multiple workers on a single machine.")),
+        'env': Arg(
+            ("-v","--env"),
+            "Set the environment for Data Platform",
+            default=None),
+
         # flower
         'broker_api': Arg(("-a", "--broker_api"), help="Broker api"),
         'flower_hostname': Arg(
@@ -1624,7 +1629,7 @@ class CLIFactory(object):
             'func': worker,
             'help': "Start a Celery worker node",
             'args': ('do_pickle', 'queues', 'concurrency', 'celery_hostname',
-                     'pid', 'daemon', 'stdout', 'stderr', 'log_file'),
+                     'pid', 'daemon', 'stdout', 'stderr', 'log_file', 'env'),
         }, {
             'func': flower,
             'help': "Start a Celery Flower",
@@ -1649,12 +1654,6 @@ class CLIFactory(object):
     def get_parser(cls, dag_parser=False):
         parser = argparse.ArgumentParser()
 
-        # Allow users to set the Data Platform environment
-        # .. default to stage
-        parser.add_argument(
-            '--env',
-            help='Set the environment for Data Platform'
-        )
         subparsers = parser.add_subparsers(
             help='sub-command help', dest='subcommand')
         subparsers.required = True
