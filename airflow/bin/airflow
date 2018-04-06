@@ -37,14 +37,15 @@ if __name__ == '__main__':
     parser = CLIFactory.get_parser()
     args = parser.parse_args()
 
-    # Start data platform application only if the env argument is passed.
-    # .. It is only required when running "airflow worker"
-    if 'env' in vars(args):
-        define_for_server()
-        options.env = args.env
-        configure()
-        application = DataPlatform(options, None)
-        application.connect()
+    # Connect to application
+    define_for_server()
+    options.env = os.environ.get('AIRFLOW_ENV')
+    configure()
+    application = DataPlatform(options, None)
+    application.connect()
 
     # Proceed to handle airflow command
     args.func(args)
+
+    # Disconnect from application
+    application.disconnect(unbind=True)

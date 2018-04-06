@@ -1432,10 +1432,6 @@ class CLIFactory(object):
             ("-cn", "--celery_hostname"),
             help=("Set the hostname of celery worker "
                   "if you have multiple workers on a single machine.")),
-        'env': Arg(
-            ("-v","--env"),
-            "Set the environment for Data Platform",
-            default=None),
 
         # flower
         'broker_api': Arg(("-a", "--broker_api"), help="Broker api"),
@@ -1629,7 +1625,7 @@ class CLIFactory(object):
             'func': worker,
             'help': "Start a Celery worker node",
             'args': ('do_pickle', 'queues', 'concurrency', 'celery_hostname',
-                     'pid', 'daemon', 'stdout', 'stderr', 'log_file', 'env'),
+                     'pid', 'daemon', 'stdout', 'stderr', 'log_file'),
         }, {
             'func': flower,
             'help': "Start a Celery Flower",
