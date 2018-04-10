@@ -48,4 +48,4 @@ if __name__ == '__main__':
     args.func(args)
 
     # Disconnect from application
-    application.disconnect(unbind=True)
+    #application.disconnect(unbind=True)
