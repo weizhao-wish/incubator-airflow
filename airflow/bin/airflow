@@ -15,18 +15,10 @@
 
 # Allow airflow to access Data Platform code
 import sys
-sys.path.insert(0,'/production/data_platform/current')
-sys.dont_write_bytecode = True
-
 import os
 from airflow import configuration
 from airflow.bin.cli import CLIFactory
-
-# Import required to run Data Platform
-from tornado.options import options
-from data_platform.server import DataPlatform
-from data_platform.server import configure
-from data_platform.core.options import define_for_server
+from airflow.bin.platform_connections import PlatformConnections
 
 if __name__ == '__main__':
 
@@ -37,15 +29,11 @@ if __name__ == '__main__':
     parser = CLIFactory.get_parser()
     args = parser.parse_args()
 
-    # Connect to application
-    define_for_server()
-    options.env = os.environ.get('AIRFLOW_ENV')
-    configure()
-    application = DataPlatform(options, None)
-    application.connect()
+    platform = os.environ.get('AIRFLOW_PLATFORM')
+
+    if platform and platform == 'data_platform':
+
+        PlatformConnections.connect_data_platform()
 
     # Proceed to handle airflow command
     args.func(args)
-
-    # Disconnect from application
-    application.disconnect(unbind=True)
