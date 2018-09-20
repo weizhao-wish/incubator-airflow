@@ -1,16 +1,22 @@
 # -*- coding: utf-8 -*-
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
-# http://www.apache.org/licenses/LICENSE-2.0
+#   http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 from __future__ import unicode_literals
 
 import getpass
@@ -73,7 +79,7 @@ class BaseTaskRunner(LoggingMixin):
 
             # propagate PYTHONPATH environment variable
             pythonpath_value = os.environ.get(PYTHONPATH_VAR, '')
-            popen_prepend = ['sudo', '-H', '-u', self.run_as_user]
+            popen_prepend = ['sudo', '-E', '-H', '-u', self.run_as_user]
 
             if pythonpath_value:
                 popen_prepend.append('{}={}'.format(PYTHONPATH_VAR, pythonpath_value))
@@ -96,11 +102,11 @@ class BaseTaskRunner(LoggingMixin):
                 line = line.decode('utf-8')
             if len(line) == 0:
                 break
-            self.log.info(u'Job {}: Subtask {} %s'.format(
-                self._task_instance.job_id, self._task_instance.task_id),
-                line.rstrip('\n'))
+            self.log.info('Job %s: Subtask %s %s',
+                          self._task_instance.job_id, self._task_instance.task_id,
+                          line.rstrip('\n'))
 
-    def run_command(self, run_with, join_args=False):
+    def run_command(self, run_with=None, join_args=False):
         """
         Run the task command
 
@@ -113,8 +119,10 @@ class BaseTaskRunner(LoggingMixin):
         :return: the process that was run
         :rtype: subprocess.Popen
         """
+        run_with = run_with or []
         cmd = [" ".join(self._command)] if join_args else self._command
         full_cmd = run_with + cmd
+
         self.log.info('Running: %s', full_cmd)
         proc = subprocess.Popen(
             full_cmd,
@@ -122,6 +130,8 @@ class BaseTaskRunner(LoggingMixin):
             stderr=subprocess.STDOUT,
             universal_newlines=True,
             close_fds=True,
+            env=os.environ.copy(),
+            preexec_fn=os.setsid
         )
 
         # Start daemon thread to read subprocess logging output

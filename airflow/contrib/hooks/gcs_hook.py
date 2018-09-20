@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
-# http://www.apache.org/licenses/LICENSE-2.0
+#   http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 #
 from apiclient.discovery import build
 from apiclient.http import MediaFileUpload
@@ -18,6 +23,8 @@ from googleapiclient import errors
 
 from airflow.contrib.hooks.gcp_api_base_hook import GoogleCloudBaseHook
 from airflow.exceptions import AirflowException
+
+import re
 
 
 class GoogleCloudStorageHook(GoogleCloudBaseHook):
@@ -27,7 +34,7 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
     """
 
     def __init__(self,
-                 google_cloud_storage_conn_id='google_cloud_storage_default',
+                 google_cloud_storage_conn_id='google_cloud_default',
                  delegate_to=None):
         super(GoogleCloudStorageHook, self).__init__(google_cloud_storage_conn_id,
                                                      delegate_to)
@@ -37,7 +44,8 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         Returns a Google Cloud Storage service object.
         """
         http_authorized = self._authorize()
-        return build('storage', 'v1', http=http_authorized)
+        return build(
+            'storage', 'v1', http=http_authorized, cache_discovery=False)
 
     # pylint:disable=redefined-builtin
     def copy(self, source_bucket, source_object, destination_bucket=None,
@@ -49,19 +57,21 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         source bucket/object is used, but not both.
 
         :param source_bucket: The bucket of the object to copy from.
-        :type source_bucket: string
+        :type source_bucket: str
         :param source_object: The object to copy.
-        :type source_object: string
+        :type source_object: str
         :param destination_bucket: The destination of the object to copied to.
             Can be omitted; then the same bucket is used.
-        :type destination_bucket: string
+        :type destination_bucket: str
         :param destination_object: The (renamed) path of the object if given.
             Can be omitted; then the same name is used.
+        :type destination_object: str
         """
         destination_bucket = destination_bucket or source_bucket
         destination_object = destination_object or source_object
-        if (source_bucket == destination_bucket and
-            source_object == destination_object):
+        if source_bucket == destination_bucket and \
+                source_object == destination_object:
+
             raise ValueError(
                 'Either source/destination bucket or source/destination object '
                 'must be different, not both the same: bucket=%s, object=%s' %
@@ -83,6 +93,57 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
                 return False
             raise
 
+    def rewrite(self, source_bucket, source_object, destination_bucket,
+                destination_object=None):
+        """
+        Has the same functionality as copy, except that will work on files
+        over 5 TB, as well as when copying between locations and/or storage
+        classes.
+
+        destination_object can be omitted, in which case source_object is used.
+
+        :param source_bucket: The bucket of the object to copy from.
+        :type source_bucket: str
+        :param source_object: The object to copy.
+        :type source_object: str
+        :param destination_bucket: The destination of the object to copied to.
+        :type destination_bucket: str
+        :param destination_object: The (renamed) path of the object if given.
+            Can be omitted; then the same name is used.
+        """
+        destination_object = destination_object or source_object
+        if (source_bucket == destination_bucket and
+                source_object == destination_object):
+            raise ValueError(
+                'Either source/destination bucket or source/destination object '
+                'must be different, not both the same: bucket=%s, object=%s' %
+                (source_bucket, source_object))
+        if not source_bucket or not source_object:
+            raise ValueError('source_bucket and source_object cannot be empty.')
+
+        service = self.get_conn()
+        request_count = 1
+        try:
+            result = service.objects() \
+                .rewrite(sourceBucket=source_bucket, sourceObject=source_object,
+                         destinationBucket=destination_bucket,
+                         destinationObject=destination_object, body='') \
+                .execute()
+            self.log.info('Rewrite request #%s: %s', request_count, result)
+            while not result['done']:
+                request_count += 1
+                result = service.objects() \
+                    .rewrite(sourceBucket=source_bucket, sourceObject=source_object,
+                             destinationBucket=destination_bucket,
+                             destinationObject=destination_object,
+                             rewriteToken=result['rewriteToken'], body='') \
+                    .execute()
+                self.log.info('Rewrite request #%s: %s', request_count, result)
+            return True
+        except errors.HttpError as ex:
+            if ex.resp['status'] == '404':
+                return False
+            raise
 
     # pylint:disable=redefined-builtin
     def download(self, bucket, object, filename=None):
@@ -90,11 +151,11 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         Get a file from Google Cloud Storage.
 
         :param bucket: The bucket to fetch from.
-        :type bucket: string
+        :type bucket: str
         :param object: The object to fetch.
-        :type object: string
+        :type object: str
         :param filename: If set, a local file path where the file should be written to.
-        :type filename: string
+        :type filename: str
         """
         service = self.get_conn()
         downloaded_file_bytes = service \
@@ -116,20 +177,26 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         Uploads a local file to Google Cloud Storage.
 
         :param bucket: The bucket to upload to.
-        :type bucket: string
+        :type bucket: str
         :param object: The object name to set when uploading the local file.
-        :type object: string
+        :type object: str
         :param filename: The local file path to the file to be uploaded.
-        :type filename: string
+        :type filename: str
         :param mime_type: The MIME type to set when uploading the file.
-        :type mime_type: string
+        :type mime_type: str
         """
         service = self.get_conn()
         media = MediaFileUpload(filename, mime_type)
-        response = service \
-            .objects() \
-            .insert(bucket=bucket, name=object, media_body=media) \
-            .execute()
+        try:
+            service \
+                .objects() \
+                .insert(bucket=bucket, name=object, media_body=media) \
+                .execute()
+            return True
+        except errors.HttpError as ex:
+            if ex.resp['status'] == '404':
+                return False
+            raise
 
     # pylint:disable=redefined-builtin
     def exists(self, bucket, object):
@@ -137,10 +204,10 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         Checks for the existence of a file in Google Cloud Storage.
 
         :param bucket: The Google cloud storage bucket where the object is.
-        :type bucket: string
+        :type bucket: str
         :param object: The name of the object to check in the Google cloud
             storage bucket.
-        :type object: string
+        :type object: str
         """
         service = self.get_conn()
         try:
@@ -160,10 +227,10 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         Checks if an object is updated in Google Cloud Storage.
 
         :param bucket: The Google cloud storage bucket where the object is.
-        :type bucket: string
+        :type bucket: str
         :param object: The name of the object to check in the Google cloud
             storage bucket.
-        :type object: string
+        :type object: str
         :param ts: The timestamp to check against.
         :type ts: datetime
         """
@@ -199,11 +266,11 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         parameter is used.
 
         :param bucket: name of the bucket, where the object resides
-        :type bucket: string
+        :type bucket: str
         :param object: name of the object to delete
-        :type object: string
+        :type object: str
         :param generation: if present, permanently delete the object of this generation
-        :type generation: string
+        :type generation: str
         :return: True if succeeded
         """
         service = self.get_conn()
@@ -224,22 +291,23 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         List all objects from the bucket with the give string prefix in name
 
         :param bucket: bucket name
-        :type bucket: string
+        :type bucket: str
         :param versions: if true, list all versions of the objects
-        :type versions: boolean
+        :type versions: bool
         :param maxResults: max count of items to return in a single page of responses
-        :type maxResults: integer
-        :param prefix: prefix string which filters objects whose name begin with this prefix
-        :type prefix: string
+        :type maxResults: int
+        :param prefix: prefix string which filters objects whose name begin with
+            this prefix
+        :type prefix: str
         :param delimiter: filters objects based on the delimiter (for e.g '.csv')
-        :type delimiter: string
+        :type delimiter: str
         :return: a stream of object names matching the filtering criteria
         """
         service = self.get_conn()
 
         ids = list()
         pageToken = None
-        while(True):
+        while True:
             response = service.objects().list(
                 bucket=bucket,
                 versions=versions,
@@ -276,12 +344,14 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         Gets the size of a file in Google Cloud Storage.
 
         :param bucket: The Google cloud storage bucket where the object is.
-        :type bucket: string
+        :type bucket: str
         :param object: The name of the object to check in the Google cloud storage bucket.
-        :type object: string
+        :type object: str
 
         """
-        self.log.info('Checking the file size of object: %s in bucket: %s', object, bucket)
+        self.log.info('Checking the file size of object: %s in bucket: %s',
+                      object,
+                      bucket)
         service = self.get_conn()
         try:
             response = service.objects().get(
@@ -305,10 +375,10 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         Gets the CRC32c checksum of an object in Google Cloud Storage.
 
         :param bucket: The Google cloud storage bucket where the object is.
-        :type bucket: string
+        :type bucket: str
         :param object: The name of the object to check in the Google cloud
             storage bucket.
-        :type object: string
+        :type object: str
         """
         self.log.info('Retrieving the crc32c checksum of '
                       'object: %s in bucket: %s', object, bucket)
@@ -332,10 +402,10 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
         Gets the MD5 hash of an object in Google Cloud Storage.
 
         :param bucket: The Google cloud storage bucket where the object is.
-        :type bucket: string
+        :type bucket: str
         :param object: The name of the object to check in the Google cloud
             storage bucket.
-        :type object: string
+        :type object: str
         """
         self.log.info('Retrieving the MD5 hash of '
                       'object: %s in bucket: %s', object, bucket)
@@ -370,7 +440,7 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
             https://cloud.google.com/storage/docs/bucketnaming.html#requirements
 
         :param bucket_name: The name of the bucket.
-        :type bucket_name: string
+        :type bucket_name: str
         :param storage_class: This defines how objects in the bucket are stored
             and determines the SLA and the cost of storage. Values include
 
@@ -381,7 +451,7 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
             - ``COLDLINE``.
             If this value is not specified when the bucket is
             created, it will default to STANDARD.
-        :type storage_class: string
+        :type storage_class: str
         :param location: The location of the bucket.
             Object data for objects in the bucket resides in physical storage
             within this region. Defaults to US.
@@ -389,9 +459,9 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
             .. seealso::
                 https://developers.google.com/storage/docs/bucket-locations
 
-        :type location: string
+        :type location: str
         :param project_id: The ID of the GCP Project.
-        :type project_id: string
+        :type project_id: str
         :param labels: User-provided labels, in key/value pairs.
         :type labels: dict
         :return: If successful, it returns the ``id`` of the bucket.
@@ -408,9 +478,16 @@ class GoogleCloudStorageHook(GoogleCloudBaseHook):
 
         self.log.info('Creating Bucket: %s; Location: %s; Storage Class: %s',
                       bucket_name, location, storage_class)
-        assert storage_class in storage_classes, \
-            'Invalid value ({}) passed to storage_class. Value should be ' \
-            'one of {}'.format(storage_class, storage_classes)
+        if storage_class not in storage_classes:
+            raise ValueError(
+                'Invalid value ({}) passed to storage_class. Value should be '
+                'one of {}'.format(storage_class, storage_classes))
+
+        if not re.match('[a-zA-Z0-9]+', bucket_name[0]):
+            raise ValueError('Bucket names must start with a number or letter.')
+
+        if not re.match('[a-zA-Z0-9]+', bucket_name[-1]):
+            raise ValueError('Bucket names must end with a number or letter.')
 
         service = self.get_conn()
         bucket_resource = {
@@ -457,5 +534,6 @@ def _parse_gcs_url(gsurl):
         raise AirflowException('Please provide a bucket name')
     else:
         bucket = parsed_url.netloc
-        blob = parsed_url.path.strip('/')
+        # Remove leading '/' but NOT trailing one
+        blob = parsed_url.path.lstrip('/')
         return bucket, blob
