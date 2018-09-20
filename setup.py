@@ -242,11 +242,7 @@ devel = [
     'click',
     'freezegun',
     'jira',
-<<<<<<< HEAD
-    'lxml',
-=======
     'lxml>=4.0.0',
->>>>>>> 17767498ce4fcb43305593c023c01c35294ab754
     'mock',
     'mongomock',
     'moto==1.1.19',
