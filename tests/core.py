@@ -97,7 +97,8 @@ def reset(dag_id=TEST_DAG_ID):
 
 
 configuration.conf.load_test_config()
-reset()
+if os.environ.get('KUBERNETES_VERSION') is None:
+    reset()
 
 
 class OperatorSubclass(BaseOperator):
@@ -434,7 +435,7 @@ class CoreTest(unittest.TestCase):
         Tests that Operators reject illegal arguments
         """
         with warnings.catch_warnings(record=True) as w:
-            t = BashOperator(
+            BashOperator(
                 task_id='test_illegal_args',
                 bash_command='echo success',
                 dag=self.dag,
@@ -946,7 +947,7 @@ class CoreTest(unittest.TestCase):
 
         models.DagStat.update([], session=session)
 
-        run1 = self.dag_bash.create_dagrun(
+        self.dag_bash.create_dagrun(
             run_id="run1",
             execution_date=DEFAULT_DATE,
             state=State.RUNNING)
@@ -964,7 +965,7 @@ class CoreTest(unittest.TestCase):
                 self.assertEqual(stats.count, 0)
             self.assertFalse(stats.dirty)
 
-        run2 = self.dag_bash.create_dagrun(
+        self.dag_bash.create_dagrun(
             run_id="run2",
             execution_date=DEFAULT_DATE + timedelta(days=1),
             state=State.RUNNING)
@@ -1088,40 +1089,44 @@ class CliTests(unittest.TestCase):
 
     def test_cli_create_user_random_password(self):
         args = self.parser.parse_args([
-            'create_user', '-u', 'test1', '-l', 'doe', '-f', 'jon',
-            '-e', 'jdoe@foo.com', '-r', 'Viewer', '--use_random_password'
+            'users', '-c', '--username', 'test1', '--lastname', 'doe',
+            '--firstname', 'jon',
+            '--email', 'jdoe@foo.com', '--role', 'Viewer', '--use_random_password'
         ])
-        cli.create_user(args)
+        cli.users(args)
 
     def test_cli_create_user_supplied_password(self):
         args = self.parser.parse_args([
-            'create_user', '-u', 'test2', '-l', 'doe', '-f', 'jon',
-            '-e', 'jdoe@apache.org', '-r', 'Viewer', '-p', 'test'
+            'users', '-c', '--username', 'test2', '--lastname', 'doe',
+            '--firstname', 'jon',
+            '--email', 'jdoe@apache.org', '--role', 'Viewer', '--password', 'test'
         ])
-        cli.create_user(args)
+        cli.users(args)
 
     def test_cli_delete_user(self):
         args = self.parser.parse_args([
-            'create_user', '-u', 'test3', '-l', 'doe', '-f', 'jon',
-            '-e', 'jdoe@example.com', '-r', 'Viewer', '--use_random_password'
+            'users', '-c', '--username', 'test3', '--lastname', 'doe',
+            '--firstname', 'jon',
+            '--email', 'jdoe@example.com', '--role', 'Viewer', '--use_random_password'
         ])
-        cli.create_user(args)
+        cli.users(args)
         args = self.parser.parse_args([
-            'delete_user', '-u', 'test3',
+            'users', '-d', '--username', 'test3',
         ])
-        cli.delete_user(args)
+        cli.users(args)
 
     def test_cli_list_users(self):
         for i in range(0, 3):
             args = self.parser.parse_args([
-                'create_user', '-u', 'user{}'.format(i), '-l', 'doe', '-f', 'jon',
-                '-e', 'jdoe+{}@gmail.com'.format(i), '-r', 'Viewer',
+                'users', '-c', '--username', 'user{}'.format(i), '--lastname',
+                'doe', '--firstname', 'jon',
+                '--email', 'jdoe+{}@gmail.com'.format(i), '--role', 'Viewer',
                 '--use_random_password'
             ])
-            cli.create_user(args)
+            cli.users(args)
         with mock.patch('sys.stdout',
                         new_callable=six.StringIO) as mock_stdout:
-            cli.list_users(self.parser.parse_args(['list_users']))
+            cli.users(self.parser.parse_args(['users', '-l']))
             stdout = mock_stdout.getvalue()
         for i in range(0, 3):
             self.assertIn('user{}'.format(i), stdout)

@@ -38,23 +38,25 @@ from airflow import configuration, models, settings, AirflowException
 from airflow.exceptions import AirflowDagCycleException, AirflowSkipException
 from airflow.jobs import BackfillJob
 from airflow.models import DAG, TaskInstance as TI
-from airflow.models import DagRun
 from airflow.models import State as ST
 from airflow.models import DagModel, DagRun, DagStat
 from airflow.models import clear_task_instances
 from airflow.models import XCom
 from airflow.models import Connection
+from airflow.models import SkipMixin
+from airflow.models import KubeResourceVersion, KubeWorkerIdentifier
 from airflow.jobs import LocalTaskJob
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.operators.bash_operator import BashOperator
 from airflow.operators.python_operator import PythonOperator
 from airflow.operators.python_operator import ShortCircuitOperator
+from airflow.operators.subdag_operator import SubDagOperator
 from airflow.ti_deps.deps.trigger_rule_dep import TriggerRuleDep
 from airflow.utils import timezone
 from airflow.utils.weight_rule import WeightRule
 from airflow.utils.state import State
 from airflow.utils.trigger_rule import TriggerRule
-from mock import patch, ANY
+from mock import patch, Mock, ANY
 from parameterized import parameterized
 from tempfile import mkdtemp, NamedTemporaryFile
 
@@ -142,11 +144,13 @@ class DagTest(unittest.TestCase):
         with dag:
             with dag:
                 op7 = DummyOperator(task_id='op7')
-        op8 = DummyOperator(task_id='op8')
-        op8.dag = dag2
+            op8 = DummyOperator(task_id='op8')
+        op9 = DummyOperator(task_id='op8')
+        op9.dag = dag2
 
         self.assertEqual(op7.dag, dag)
-        self.assertEqual(op8.dag, dag2)
+        self.assertEqual(op8.dag, dag)
+        self.assertEqual(op9.dag, dag2)
 
     def test_dag_topological_sort(self):
         dag = DAG(
@@ -342,20 +346,41 @@ class DagTest(unittest.TestCase):
         session.merge(ti4)
         session.commit()
 
-        self.assertEqual(0, DAG.get_num_task_instances(test_dag_id, ['fakename'],
-            session=session))
-        self.assertEqual(4, DAG.get_num_task_instances(test_dag_id, [test_task_id],
-            session=session))
-        self.assertEqual(4, DAG.get_num_task_instances(test_dag_id,
-            ['fakename', test_task_id], session=session))
-        self.assertEqual(1, DAG.get_num_task_instances(test_dag_id, [test_task_id],
-            states=[None], session=session))
-        self.assertEqual(2, DAG.get_num_task_instances(test_dag_id, [test_task_id],
-            states=[State.RUNNING], session=session))
-        self.assertEqual(3, DAG.get_num_task_instances(test_dag_id, [test_task_id],
-            states=[None, State.RUNNING], session=session))
-        self.assertEqual(4, DAG.get_num_task_instances(test_dag_id, [test_task_id],
-            states=[None, State.QUEUED, State.RUNNING], session=session))
+        self.assertEqual(
+            0,
+            DAG.get_num_task_instances(test_dag_id, ['fakename'], session=session)
+        )
+        self.assertEqual(
+            4,
+            DAG.get_num_task_instances(test_dag_id, [test_task_id], session=session)
+        )
+        self.assertEqual(
+            4,
+            DAG.get_num_task_instances(
+                test_dag_id, ['fakename', test_task_id], session=session)
+        )
+        self.assertEqual(
+            1,
+            DAG.get_num_task_instances(
+                test_dag_id, [test_task_id], states=[None], session=session)
+        )
+        self.assertEqual(
+            2,
+            DAG.get_num_task_instances(
+                test_dag_id, [test_task_id], states=[State.RUNNING], session=session)
+        )
+        self.assertEqual(
+            3,
+            DAG.get_num_task_instances(
+                test_dag_id, [test_task_id],
+                states=[None, State.RUNNING], session=session)
+        )
+        self.assertEqual(
+            4,
+            DAG.get_num_task_instances(
+                test_dag_id, [test_task_id],
+                states=[None, State.QUEUED, State.RUNNING], session=session)
+        )
         session.close()
 
     def test_render_template_field(self):
@@ -376,7 +401,7 @@ class DagTest(unittest.TestCase):
 
         dag = DAG('test-dag',
                   start_date=DEFAULT_DATE,
-                  user_defined_macros = dict(foo='bar'))
+                  user_defined_macros=dict(foo='bar'))
 
         with dag:
             task = DummyOperator(task_id='op1')
@@ -415,11 +440,11 @@ class DagTest(unittest.TestCase):
             if a custom filter was defined"""
 
         def jinja_udf(name):
-            return 'Hello %s' %name
+            return 'Hello %s' % name
 
         dag = DAG('test-dag',
                   start_date=DEFAULT_DATE,
-                  user_defined_filters = dict(hello=jinja_udf))
+                  user_defined_filters=dict(hello=jinja_udf))
 
         with dag:
             task = DummyOperator(task_id='op1')
@@ -553,6 +578,38 @@ class DagTest(unittest.TestCase):
         with self.assertRaises(AirflowDagCycleException):
             dag.test_cycle()
 
+    @patch('airflow.models.timezone.utcnow')
+    def test_sync_to_db(self, mock_now):
+        dag = DAG(
+            'dag',
+            start_date=DEFAULT_DATE,
+        )
+        with dag:
+            DummyOperator(task_id='task', owner='owner1')
+            SubDagOperator(
+                task_id='subtask',
+                owner='owner2',
+                subdag=DAG(
+                    'dag.subtask',
+                    start_date=DEFAULT_DATE,
+                )
+            )
+        now = datetime.datetime.utcnow().replace(tzinfo=pendulum.timezone('UTC'))
+        mock_now.return_value = now
+        session = settings.Session()
+        dag.sync_to_db(session=session)
+
+        orm_dag = session.query(DagModel).filter(DagModel.dag_id == 'dag').one()
+        self.assertEqual(set(orm_dag.owners.split(', ')), {'owner1', 'owner2'})
+        self.assertEqual(orm_dag.last_scheduler_run, now)
+        self.assertTrue(orm_dag.is_active)
+
+        orm_subdag = session.query(DagModel).filter(
+            DagModel.dag_id == 'dag.subtask').one()
+        self.assertEqual(set(orm_subdag.owners.split(', ')), {'owner1', 'owner2'})
+        self.assertEqual(orm_subdag.last_scheduler_run, now)
+        self.assertTrue(orm_subdag.is_active)
+
 
 class DagStatTest(unittest.TestCase):
     def test_dagstats_crud(self):
@@ -602,6 +659,25 @@ class DagStatTest(unittest.TestCase):
         res = qry2.all()
         for stat in res:
             self.assertFalse(stat.dirty)
+
+    def test_update_exception(self):
+        session = Mock()
+        (session.query.return_value
+            .filter.return_value
+            .with_for_update.return_value
+            .all.side_effect) = RuntimeError('it broke')
+        DagStat.update(session=session)
+        session.rollback.assert_called()
+
+    def test_set_dirty_exception(self):
+        session = Mock()
+        session.query.return_value.filter.return_value.all.return_value = []
+        (session.query.return_value
+            .filter.return_value
+            .with_for_update.return_value
+            .all.side_effect) = RuntimeError('it broke')
+        DagStat.set_dirty('dag', session)
+        session.rollback.assert_called()
 
 
 class DagRunTest(unittest.TestCase):
@@ -693,10 +769,14 @@ class DagRunTest(unittest.TestCase):
 
         session.commit()
 
-        self.assertEqual(1, len(models.DagRun.find(dag_id=dag_id1, external_trigger=True)))
-        self.assertEqual(0, len(models.DagRun.find(dag_id=dag_id1, external_trigger=False)))
-        self.assertEqual(0, len(models.DagRun.find(dag_id=dag_id2, external_trigger=True)))
-        self.assertEqual(1, len(models.DagRun.find(dag_id=dag_id2, external_trigger=False)))
+        self.assertEqual(1,
+                         len(models.DagRun.find(dag_id=dag_id1, external_trigger=True)))
+        self.assertEqual(0,
+                         len(models.DagRun.find(dag_id=dag_id1, external_trigger=False)))
+        self.assertEqual(0,
+                         len(models.DagRun.find(dag_id=dag_id2, external_trigger=True)))
+        self.assertEqual(1,
+                         len(models.DagRun.find(dag_id=dag_id2, external_trigger=False)))
 
     def test_dagrun_success_when_all_skipped(self):
         """
@@ -1081,9 +1161,9 @@ class DagRunTest(unittest.TestCase):
             dag_id='test_latest_runs_1',
             start_date=DEFAULT_DATE)
         dag_1_run_1 = self.create_dag_run(dag,
-                execution_date=timezone.datetime(2015, 1, 1))
+                                          execution_date=timezone.datetime(2015, 1, 1))
         dag_1_run_2 = self.create_dag_run(dag,
-                execution_date=timezone.datetime(2015, 1, 2))
+                                          execution_date=timezone.datetime(2015, 1, 2))
         dagruns = models.DagRun.get_latest_runs(session)
         session.close()
         for dagrun in dagruns:
@@ -1133,12 +1213,19 @@ class DagRunTest(unittest.TestCase):
 
 
 class DagBagTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.empty_dir = mkdtemp()
+
+    @classmethod
+    def tearDownClass(cls):
+        os.rmdir(cls.empty_dir)
 
     def test_get_existing_dag(self):
         """
         test that were're able to parse some example DAGs and retrieve them
         """
-        dagbag = models.DagBag(include_examples=True)
+        dagbag = models.DagBag(dag_folder=self.empty_dir, include_examples=True)
 
         some_expected_dag_ids = ["example_bash_operator",
                                  "example_branch_operator"]
@@ -1155,7 +1242,7 @@ class DagBagTest(unittest.TestCase):
         """
         test that retrieving a non existing dag id returns None without crashing
         """
-        dagbag = models.DagBag(include_examples=True)
+        dagbag = models.DagBag(dag_folder=self.empty_dir, include_examples=False)
 
         non_existing_dag_id = "non_existing_dag_id"
         self.assertIsNone(dagbag.get_dag(non_existing_dag_id))
@@ -1168,7 +1255,7 @@ class DagBagTest(unittest.TestCase):
         f.write('\u3042'.encode('utf8'))  # write multi-byte char (hiragana)
         f.flush()
 
-        dagbag = models.DagBag(include_examples=True)
+        dagbag = models.DagBag(dag_folder=self.empty_dir, include_examples=False)
         self.assertEqual([], dagbag.process_file(f.name))
 
     def test_zip_skip_log(self):
@@ -1190,7 +1277,7 @@ class DagBagTest(unittest.TestCase):
         """
         test the loading of a DAG within a zip file that includes dependencies
         """
-        dagbag = models.DagBag()
+        dagbag = models.DagBag(dag_folder=self.empty_dir, include_examples=False)
         dagbag.process_file(os.path.join(TEST_DAGS_FOLDER, "test_zip.zip"))
         self.assertTrue(dagbag.get_dag("test_zip_dag"))
 
@@ -1200,14 +1287,14 @@ class DagBagTest(unittest.TestCase):
         as schedule interval can be identified
         """
         invalid_dag_files = ["test_invalid_cron.py", "test_zip_invalid_cron.zip"]
-        dagbag = models.DagBag(dag_folder=mkdtemp())
+        dagbag = models.DagBag(dag_folder=self.empty_dir, include_examples=False)
 
         self.assertEqual(len(dagbag.import_errors), 0)
         for d in invalid_dag_files:
             dagbag.process_file(os.path.join(TEST_DAGS_FOLDER, d))
         self.assertEqual(len(dagbag.import_errors), len(invalid_dag_files))
 
-    @patch.object(DagModel,'get_current')
+    @patch.object(DagModel, 'get_current')
     def test_get_dag_without_refresh(self, mock_dagmodel):
         """
         Test that, once a DAG is loaded, it doesn't get refreshed again if it
@@ -1221,6 +1308,7 @@ class DagBagTest(unittest.TestCase):
 
         class TestDagBag(models.DagBag):
             process_file_calls = 0
+
             def process_file(self, filepath, only_if_updated=True, safe_mode=True):
                 if 'example_bash_operator.py' == os.path.basename(filepath):
                     TestDagBag.process_file_calls += 1
@@ -1263,7 +1351,7 @@ class DagBagTest(unittest.TestCase):
         f.write(source.encode('utf8'))
         f.flush()
 
-        dagbag = models.DagBag(include_examples=False)
+        dagbag = models.DagBag(dag_folder=self.empty_dir, include_examples=False)
         found_dags = dagbag.process_file(f.name)
         return dagbag, found_dags, f.name
 
@@ -1440,6 +1528,7 @@ class DagBagTest(unittest.TestCase):
         Don't crash when loading an invalid (contains a cycle) DAG file.
         Don't load the dag into the DagBag either
         """
+
         # Define Dag to load
         def basic_cycle():
             from airflow.models import DAG
@@ -1573,7 +1662,7 @@ class DagBagTest(unittest.TestCase):
         """
         test that process_file can handle Nones
         """
-        dagbag = models.DagBag(include_examples=True)
+        dagbag = models.DagBag(dag_folder=self.empty_dir, include_examples=False)
 
         self.assertEqual([], dagbag.process_file(None))
 
@@ -1611,7 +1700,8 @@ class TaskInstanceTest(unittest.TestCase):
         """
         Test that tasks properly take start/end dates from DAGs
         """
-        dag = DAG('dag', start_date=DEFAULT_DATE, end_date=DEFAULT_DATE + datetime.timedelta(days=10))
+        dag = DAG('dag', start_date=DEFAULT_DATE,
+                  end_date=DEFAULT_DATE + datetime.timedelta(days=10))
 
         op1 = DummyOperator(task_id='op_1', owner='test')
 
@@ -1776,7 +1866,6 @@ class TaskInstanceTest(unittest.TestCase):
         ti = TI(task=task, execution_date=timezone.utcnow())
         ti.run()
         self.assertEqual(ti.state, models.State.NONE)
-
 
     @patch.object(TI, 'pool_full')
     def test_run_pooling_task(self, mock_pool_full):
@@ -1971,11 +2060,11 @@ class TaskInstanceTest(unittest.TestCase):
 
         ti.try_number = 9
         dt = ti.next_retry_datetime()
-        self.assertEqual(dt, ti.end_date+max_delay)
+        self.assertEqual(dt, ti.end_date + max_delay)
 
         ti.try_number = 50
         dt = ti.next_retry_datetime()
-        self.assertEqual(dt, ti.end_date+max_delay)
+        self.assertEqual(dt, ti.end_date + max_delay)
 
     def test_depends_on_past(self):
         dagbag = models.DagBag()
@@ -2217,7 +2306,7 @@ class TaskInstanceTest(unittest.TestCase):
     def test_check_and_change_state_before_execution_dep_not_met(self):
         dag = models.DAG(dag_id='test_check_and_change_state_before_execution')
         task = DummyOperator(task_id='task', dag=dag, start_date=DEFAULT_DATE)
-        task2= DummyOperator(task_id='task2', dag=dag, start_date=DEFAULT_DATE)
+        task2 = DummyOperator(task_id='task2', dag=dag, start_date=DEFAULT_DATE)
         task >> task2
         ti = TI(
             task=task2, execution_date=timezone.utcnow())
@@ -2313,6 +2402,35 @@ class TaskInstanceTest(unittest.TestCase):
         ti.overwrite_params_with_dag_run_conf(params, dag_run)
 
         self.assertEqual(False, params["override"])
+
+    @patch('airflow.models.send_email')
+    def test_email_alert(self, mock_send_email):
+        task = DummyOperator(task_id='op', email='test@test.test')
+        ti = TI(task=task, execution_date=datetime.datetime.now())
+        ti.email_alert(RuntimeError('it broke'))
+
+        self.assertTrue(mock_send_email.called)
+        (email, title, body), _ = mock_send_email.call_args
+        self.assertEqual(email, 'test@test.test')
+        self.assertIn(repr(ti), title)
+        self.assertIn('it broke', body)
+
+    def test_set_duration(self):
+        task = DummyOperator(task_id='op', email='test@test.test')
+        ti = TI(
+            task=task,
+            execution_date=datetime.datetime.now(),
+        )
+        ti.start_date = datetime.datetime(2018, 10, 1, 1)
+        ti.end_date = datetime.datetime(2018, 10, 1, 2)
+        ti.set_duration()
+        self.assertEqual(ti.duration, 3600)
+
+    def test_set_duration_empty_dates(self):
+        task = DummyOperator(task_id='op', email='test@test.test')
+        ti = TI(task=task, execution_date=datetime.datetime.now())
+        ti.set_duration()
+        self.assertIsNone(ti.duration)
 
 
 class ClearTasksTest(unittest.TestCase):
@@ -2436,7 +2554,8 @@ class ClearTasksTest(unittest.TestCase):
         for i in range(num_of_dags):
             dag = DAG('test_dag_clear_' + str(i), start_date=DEFAULT_DATE,
                       end_date=DEFAULT_DATE + datetime.timedelta(days=10))
-            ti = TI(task=DummyOperator(task_id='test_task_clear_' + str(i), owner='test', dag=dag),
+            ti = TI(task=DummyOperator(task_id='test_task_clear_' + str(i), owner='test',
+                                       dag=dag),
                     execution_date=DEFAULT_DATE)
             dags.append(dag)
             tis.append(ti)
@@ -2658,8 +2777,8 @@ class ConnectionTest(unittest.TestCase):
         self.assertIsNone(connection.extra)
 
     def test_connection_from_uri_with_extras(self):
-        uri = 'scheme://user:password@host%2flocation:1234/schema?'\
-            'extra1=a%20value&extra2=%2fpath%2f'
+        uri = 'scheme://user:password@host%2flocation:1234/schema?' \
+              'extra1=a%20value&extra2=%2fpath%2f'
         connection = Connection(uri=uri)
         self.assertEqual(connection.conn_type, 'scheme')
         self.assertEqual(connection.host, 'host/location')
@@ -2669,3 +2788,99 @@ class ConnectionTest(unittest.TestCase):
         self.assertEqual(connection.port, 1234)
         self.assertDictEqual(connection.extra_dejson, {'extra1': 'a value',
                                                        'extra2': '/path/'})
+
+
+class TestSkipMixin(unittest.TestCase):
+
+    @patch('airflow.models.timezone.utcnow')
+    def test_skip(self, mock_now):
+        session = settings.Session()
+        now = datetime.datetime.utcnow().replace(tzinfo=pendulum.timezone('UTC'))
+        mock_now.return_value = now
+        dag = DAG(
+            'dag',
+            start_date=DEFAULT_DATE,
+        )
+        with dag:
+            tasks = [DummyOperator(task_id='task')]
+        dag_run = dag.create_dagrun(
+            run_id='manual__' + now.isoformat(),
+            state=State.FAILED,
+        )
+        SkipMixin().skip(
+            dag_run=dag_run,
+            execution_date=now,
+            tasks=tasks,
+            session=session)
+
+        session.query(TI).filter(
+            TI.dag_id == 'dag',
+            TI.task_id == 'task',
+            TI.state == State.SKIPPED,
+            TI.start_date == now,
+            TI.end_date == now,
+        ).one()
+
+    @patch('airflow.models.timezone.utcnow')
+    def test_skip_none_dagrun(self, mock_now):
+        session = settings.Session()
+        now = datetime.datetime.utcnow().replace(tzinfo=pendulum.timezone('UTC'))
+        mock_now.return_value = now
+        dag = DAG(
+            'dag',
+            start_date=DEFAULT_DATE,
+        )
+        with dag:
+            tasks = [DummyOperator(task_id='task')]
+        SkipMixin().skip(
+            dag_run=None,
+            execution_date=now,
+            tasks=tasks,
+            session=session)
+
+        session.query(TI).filter(
+            TI.dag_id == 'dag',
+            TI.task_id == 'task',
+            TI.state == State.SKIPPED,
+            TI.start_date == now,
+            TI.end_date == now,
+        ).one()
+
+    def test_skip_none_tasks(self):
+        session = Mock()
+        SkipMixin().skip(dag_run=None, execution_date=None, tasks=[], session=session)
+        self.assertFalse(session.query.called)
+        self.assertFalse(session.commit.called)
+
+
+class TestKubeResourceVersion(unittest.TestCase):
+
+    def test_checkpoint_resource_version(self):
+        session = settings.Session()
+        KubeResourceVersion.checkpoint_resource_version('7', session)
+        self.assertEqual(KubeResourceVersion.get_current_resource_version(session), '7')
+
+    def test_reset_resource_version(self):
+        session = settings.Session()
+        version = KubeResourceVersion.reset_resource_version(session)
+        self.assertEqual(version, '0')
+        self.assertEqual(KubeResourceVersion.get_current_resource_version(session), '0')
+
+
+class TestKubeWorkerIdentifier(unittest.TestCase):
+
+    @patch('airflow.models.uuid.uuid4')
+    def test_get_or_create_not_exist(self, mock_uuid):
+        session = settings.Session()
+        session.query(KubeWorkerIdentifier).update({
+            KubeWorkerIdentifier.worker_uuid: ''
+        })
+        mock_uuid.return_value = 'abcde'
+        worker_uuid = KubeWorkerIdentifier.get_or_create_current_kube_worker_uuid(session)
+        self.assertEqual(worker_uuid, 'abcde')
+
+    def test_get_or_create_exist(self):
+        session = settings.Session()
+        KubeWorkerIdentifier.checkpoint_kube_worker_uuid('fghij', session)
+        worker_uuid = KubeWorkerIdentifier.get_or_create_current_kube_worker_uuid(session)
+        self.assertEqual(worker_uuid, 'fghij')
