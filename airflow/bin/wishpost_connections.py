@@ -15,6 +15,7 @@ class WishPostConnections(object):
         from wishpost.server import WishPostApplication
         from wishpost.server import configure
         from tornado.options import options
+        from cl.utils.tornadoutil.extopts import ExtOpt
 
         # Connect to application
         define_for_scripts()
@@ -22,3 +23,11 @@ class WishPostConnections(object):
         configure()
         application = WishPostApplication(options, None)
         application.connect()
+
+        if not hasattr(options, 'application'):
+            try:
+                ExtOpt.define('application', default=None, hidden=True,
+                              type=object)
+            except:
+                pass
+        options.application = application
