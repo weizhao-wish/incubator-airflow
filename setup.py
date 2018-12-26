@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Kept manually in sync with airflow.__version__
 version = imp.load_source(
     'airflow.version', os.path.join('airflow', 'version.py')).version
-
+print version
 
 class Tox(TestCommand):
     user_options = [('tox-args=', None, "Arguments to pass to tox")]
