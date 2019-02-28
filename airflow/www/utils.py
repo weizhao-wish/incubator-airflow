@@ -243,6 +243,8 @@ def action_logging(f):
     def wrapper(*args, **kwargs):
         if current_user and hasattr(current_user, 'username'):
             user = current_user.username
+        elif request.remote_addr is not None:
+            user = request.remote_addr
         else:
             user = 'anonymous'
 
